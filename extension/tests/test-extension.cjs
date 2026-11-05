@@ -5,6 +5,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const extension = path.resolve(__dirname, "..");
+const submissions = (messages) => messages.filter((message) => message.type === "SUBMISSION");
 
 test("page listener reports Accepted only after a fresh Submit request", async () => {
   const messages = [];
@@ -34,11 +35,12 @@ test("page listener reports Accepted only after a fresh Submit request", async (
   assert.equal(messages.length, 0);
   await window.fetch("https://leetcode.com/problems/two-sum/submit/", { method: "POST" });
   await new Promise(setImmediate);
-  assert.equal(messages.length, 0);
+  assert.ok(messages.some((message) => message.type === "SUBMIT_STARTED"));
+  assert.equal(submissions(messages).length, 0);
   await window.fetch("https://leetcode.com/submissions/detail/123/check/");
   await new Promise(setImmediate);
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].id, "123");
+  assert.equal(submissions(messages).length, 1);
+  assert.equal(submissions(messages)[0].id, "123");
 });
 
 test("opening an old result page or checking an unrelated ID never uploads it", async () => {
@@ -70,8 +72,8 @@ test("opening an old result page or checking an unrelated ID never uploads it", 
   assert.equal(messages.length, 0);
   await window.fetch("https://leetcode.com/problems/two-sum/submit/", { method: "POST" });
   await new Promise(setImmediate);
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].id, "456");
+  assert.equal(submissions(messages).length, 1);
+  assert.equal(submissions(messages)[0].id, "456");
 });
 
 test("XHR detection also requires a fresh Submit response", () => {
@@ -100,14 +102,86 @@ test("XHR detection also requires a fresh Submit response", () => {
   submit.open("POST", "/problems/two-sum/submit/"); submit.send();
   const check = new XMLHttpRequest();
   check.open("GET", "/submissions/detail/777/check/"); check.send();
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].id, "777");
+  assert.ok(messages.some((message) => message.type === "SUBMIT_STARTED"));
+  assert.equal(submissions(messages).length, 1);
+  assert.equal(submissions(messages)[0].id, "777");
+});
+
+test("a fresh non-Accepted result ends checking without uploading", async () => {
+  const messages = [];
+  const window = {
+    fetch: async (url) => ({
+      ok: true,
+      clone: () => ({ json: async () => url.includes("/submit/")
+        ? { submission_id: 222 }
+        : { state: "SUCCESS", status_code: 11, status_msg: "Wrong Answer" } }),
+    }),
+    postMessage: (message) => messages.push(message),
+    addEventListener() {},
+  };
+  class XMLHttpRequest {}
+  XMLHttpRequest.prototype.open = function () {};
+  XMLHttpRequest.prototype.send = function () {};
+  vm.runInNewContext(fs.readFileSync(path.join(extension, "page-listener.js"), "utf8"), {
+    window, XMLHttpRequest,
+    location: { origin: "https://leetcode.com", pathname: "/problems/two-sum/" },
+    history: { pushState() {}, replaceState() {} },
+    document: { readyState: "complete" },
+  });
+  await window.fetch("https://leetcode.com/problems/two-sum/submit/", { method: "POST" });
+  await new Promise(setImmediate);
+  await window.fetch("https://leetcode.com/submissions/detail/222/check/");
+  await new Promise(setImmediate);
+  assert.equal(submissions(messages).length, 0);
+  assert.ok(messages.some((message) => message.type === "SUBMISSION_RESULT" && message.id === "222"));
+});
+
+test("a rejected Submit request reports an indicator error without uploading", async () => {
+  const messages = [];
+  const window = {
+    fetch: async () => ({ ok: false, status: 403 }),
+    postMessage: (message) => messages.push(message),
+    addEventListener() {},
+  };
+  class XMLHttpRequest {}
+  XMLHttpRequest.prototype.open = function () {};
+  XMLHttpRequest.prototype.send = function () {};
+  vm.runInNewContext(fs.readFileSync(path.join(extension, "page-listener.js"), "utf8"), {
+    window, XMLHttpRequest,
+    location: { origin: "https://leetcode.com", pathname: "/problems/two-sum/" },
+    history: { pushState() {}, replaceState() {} },
+    document: { readyState: "complete" },
+  });
+  await window.fetch("https://leetcode.com/problems/two-sum/submit/", { method: "POST" });
+  await new Promise(setImmediate);
+  assert.ok(messages.some((message) => message.type === "SUBMIT_STARTED"));
+  assert.ok(messages.some((message) => message.type === "SUBMIT_FAILED"));
+  assert.equal(submissions(messages).length, 0);
 });
 
 test("content script verifies Accepted and retrieves source and question number", async () => {
   let listener;
   const requests = [];
-  const chrome = { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } };
+  const chrome = { runtime: {
+    onMessage: { addListener: (fn) => { listener = fn; } },
+    sendMessage: (_message, callback) => callback({ ok: true, ready: true, canProcess: true }),
+  } };
+  class FakeNode {
+    constructor() { this.children = []; this.style = {}; this.dataset = {}; }
+    append(...children) { this.children.push(...children); }
+    appendChild(child) { this.children.push(child); }
+    attachShadow() { return new FakeNode(); }
+    querySelector(selector) { return this.children.find((child) => `.${child.className}` === selector); }
+    setAttribute() {}
+    addEventListener() {}
+  }
+  const document = {
+    cookie: "csrftoken=csrf-value",
+    readyState: "complete",
+    documentElement: new FakeNode(),
+    createElement: () => new FakeNode(),
+    addEventListener() {},
+  };
   const fetch = async (_url, options) => {
     requests.push(options);
     const { query } = JSON.parse(options.body);
@@ -117,9 +191,9 @@ test("content script verifies Accepted and retrieves source and question number"
     }) };
   };
   vm.runInNewContext(fs.readFileSync(path.join(extension, "content.js"), "utf8"), {
-    chrome, fetch, setTimeout,
+    chrome, fetch, setTimeout: () => 1, clearTimeout() {},
     window: { addEventListener() {} },
-    document: { cookie: "csrftoken=csrf-value" },
+    document, location: { origin: "https://leetcode.com" },
   });
   const result = await new Promise((resolve) => listener({ type: "GET_SUBMISSION", id: "123" }, {}, resolve));
   assert.equal(result.ok, true);
@@ -127,6 +201,82 @@ test("content script verifies Accepted and retrieves source and question number"
   assert.equal(result.details.code, "print(1)");
   assert.equal(requests.length, 2);
   assert.equal(requests[0].headers["X-CSRFToken"], "csrf-value");
+});
+
+test("on-page indicator shows ready, processing, and error states", () => {
+  const listeners = {};
+  const sent = [];
+  let readiness = { ok: true, ready: true, canProcess: true, reason: "Ready" };
+  let heldCandidate;
+  class FakeNode {
+    constructor() { this.children = []; this.style = {}; this.dataset = {}; this.attributes = {}; }
+    append(...children) { this.children.push(...children); }
+    attachShadow() { this.shadow = new FakeNode(); return this.shadow; }
+    querySelector(selector) { return this.children.find((child) => `.${child.className}` === selector); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  const document = {
+    cookie: "", readyState: "complete", documentElement: new FakeNode(),
+    createElement: () => new FakeNode(), addEventListener() {},
+  };
+  const window = {
+    addEventListener: (name, listener) => { listeners[name] = listener; },
+    postMessage(message, origin) {
+      if (message.type === "PING") listeners.message({
+        source: window, origin,
+        data: { source: "leet2git-page", type: "LISTENER_READY" },
+      });
+    },
+  };
+  const chrome = { runtime: {
+    onMessage: { addListener() {} },
+    sendMessage: (message, callback) => {
+      sent.push(message);
+      if (message.type === "ACCEPTED_CANDIDATE" && message.id === "125") {
+        heldCandidate = callback;
+        return;
+      }
+      callback(message.type === "GET_READY"
+        ? readiness
+        : { ok: true, outcome: "uploaded", message: "Uploaded 1. Two Sum" });
+    },
+  } };
+  vm.runInNewContext(fs.readFileSync(path.join(extension, "content.js"), "utf8"), {
+    chrome, document, window, location: { origin: "https://leetcode.com" },
+    setTimeout: () => 1, clearTimeout() {},
+  });
+  const badge = document.documentElement.children[0].shadow.children[1];
+  const pageMessage = (type, details = {}) => listeners.message({
+    source: window, origin: "https://leetcode.com",
+    data: { source: "leet2git-page", type, ...details },
+  });
+  assert.equal(badge.dataset.state, "ready");
+  readiness = { ok: true, ready: false, canProcess: false, reason: "Connect GitHub" };
+  listeners.focus();
+  assert.equal(badge.dataset.state, "error");
+  assert.ok(badge.title.includes("Connect GitHub"));
+  readiness = { ok: true, ready: true, canProcess: true, reason: "Ready" };
+  listeners.focus();
+  assert.equal(badge.dataset.state, "ready");
+  pageMessage("SUBMIT_STARTED");
+  assert.equal(badge.dataset.state, "processing");
+  pageMessage("SUBMISSION_RESULT", { id: "123" });
+  assert.equal(badge.dataset.state, "ready");
+  assert.equal(sent.filter((message) => message.type === "ACCEPTED_CANDIDATE").length, 0);
+  pageMessage("SUBMIT_STARTED");
+  pageMessage("SUBMISSION", { id: "124", confirmed: true });
+  assert.equal(badge.dataset.state, "ready");
+  assert.ok(badge.title.includes("Uploaded"));
+  assert.equal(sent.at(-1).id, "124");
+  pageMessage("SUBMIT_STARTED");
+  pageMessage("SUBMISSION", { id: "125", confirmed: true });
+  pageMessage("SUBMISSION_RESULT", { id: "126" });
+  assert.equal(badge.dataset.state, "processing");
+  heldCandidate({ ok: true, outcome: "uploaded", message: "Uploaded 2. Add Two Numbers" });
+  assert.equal(badge.dataset.state, "ready");
+  pageMessage("SUBMIT_FAILED", { status: 403 });
+  assert.equal(badge.dataset.state, "error");
+  assert.ok(badge.title.includes("HTTP 403"));
 });
 
 test("worker creates a private repo and saves code plus question details", async () => {
@@ -169,16 +319,28 @@ test("worker creates a private repo and saves code plus question details", async
     chrome, fetch, URL, TextEncoder, btoa, Date, Set, encodeURIComponent,
   });
   const send = (message, sender) => new Promise((resolve) => listener(message, sender, resolve));
+  const pageSender = {
+    id: "extension-id", tab: { id: 1 }, frameId: 0,
+    url: "https://leetcode.com/problems/two-sum/",
+  };
+  const beforeSetup = await send({ type: "GET_READY" }, pageSender);
+  assert.equal(beforeSetup.ok, true);
+  assert.equal(beforeSetup.ready, false);
   const setup = await send(
     { type: "SAVE_CONFIG", repo: "leetcode-solutions", token: "test-token", enabled: true },
     { id: "extension-id" },
   );
   assert.equal(setup.ok, true);
+  const ready = await send({ type: "GET_READY" }, pageSender);
+  assert.equal(ready.ok, true);
+  assert.equal(ready.ready, true);
+  assert.equal(Object.hasOwn(ready, "token"), false);
   const synced = await send(
     { type: "ACCEPTED_CANDIDATE", id: "123" },
-    { id: "extension-id", tab: { id: 1 }, frameId: 0, url: "https://leetcode.com/problems/two-sum/" },
+    pageSender,
   );
   assert.equal(synced.ok, true);
+  assert.equal(synced.outcome, "uploaded");
   assert.equal(uploads.length, 2);
   assert.match(uploads[0].url, /solutions\/two-sum\/123\.py$/);
   assert.equal(Buffer.from(uploads[0].body.content, "base64").toString(), "print('hello')\n");

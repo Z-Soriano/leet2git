@@ -1,10 +1,10 @@
 # leet2git browser extension
 
-This Chrome/Edge extension watches LeetCode problem pages. It acts only after you make a **new Submit request** and that submission is **Accepted**. It reads that submission from LeetCode and saves it to GitHub. Opening an old problem or old submission page does not start an upload. The extension runs while you solve problems; you do not need to leave an extension tab or popup open.
+This Chromium extension watches LeetCode problem pages. It acts only after you make a **new Submit request** and that submission is **Accepted**. It reads that submission from LeetCode and saves it to GitHub. Opening an old problem or old submission page does not start an upload. The extension runs while you solve problems; you do not need to leave an extension tab or popup open.
 
 ## Install
 
-1. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
+1. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge. In Opera GX, press **Ctrl+Shift+E**.
 2. Turn on **Developer mode**.
 3. Click **Load unpacked** and choose this `extension` folder.
 4. Click the leet2git toolbar icon once to configure it. Enter a GitHub personal access token and a repository name, then click **Save and connect**. The default repository name is `leetcode-solutions`, separate from the `leet2git` project repository. If it does not exist, the extension creates it as a private repository. The **Make a new repository public** box changes only a newly created repository. Existing installs using the old `leet2git` default switch to `leetcode-solutions` automatically on their next Accepted submission.
@@ -24,7 +24,7 @@ solutions/
     123456790.cpp
 ```
 
-The popup shows the latest upload or error. A green check on the toolbar icon means the last upload succeeded; `!` means something needs attention. The extension runs only when you use a LeetCode problem page in this browser. It does not import old submissions automatically. The Python command in the parent folder remains available if you deliberately want to import recent accepted submissions that the extension missed.
+On LeetCode problem pages, a small circle appears at the bottom right. **Orange** means the extension is ready, a **spinning ring** means a new submission is being judged or saved, and **red** means it cannot check or save submissions. Hover over or focus the circle to read the current status. A non-Accepted result returns to orange without uploading. The popup still shows the latest upload or error, but it does not need to stay open. A green check on the toolbar icon means the last upload succeeded; `!` means something needs attention. The extension runs only when you use a LeetCode problem page in this browser. It does not import old submissions automatically. The Python command in the parent folder remains available if you deliberately want to import recent accepted submissions that the extension missed.
 
 ## Limits
 

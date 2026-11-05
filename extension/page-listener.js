@@ -7,7 +7,18 @@
   const pendingKey = "leet2git-fresh-submissions";
   const maxAgeMs = 2 * 60 * 1000;
   const submitted = new Map();
-  const acceptedChecks = new Set();
+  const finishedChecks = new Map();
+
+  function notify(type, details = {}) {
+    window.postMessage({ source: "leet2git-page", type, ...details }, location.origin);
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.origin !== location.origin) return;
+    if (event.data?.source === "leet2git-content" && event.data.type === "PING") {
+      notify("LISTENER_READY");
+    }
+  });
 
   // Keep only newly submitted IDs across a same-tab page reload. Old result
   // pages have no matching ID and cannot trigger a sync.
@@ -29,28 +40,41 @@
     return submitted.has(String(id));
   }
 
-  function rememberSubmit(body) {
-    const id = String(body?.submission_id ?? body?.submissionId ?? "");
-    if (!/^\d+$/.test(id)) return;
-    submitted.set(id, Date.now());
-    try { sessionStorage.setItem(pendingKey, JSON.stringify([...submitted])); } catch (_) {}
-    if (acceptedChecks.has(id)) emit(id);
-    inspectRoute();
+  function checkFailed(url, status) {
+    const id = String(url || "").match(checkPath)?.[1];
+    if (id && fresh(id)) notify("CHECK_FAILED", { id, status });
   }
 
-  function emit(id) {
+  function rememberSubmit(body) {
+    const id = String(body?.submission_id ?? body?.submissionId ?? "");
+    if (!/^\d+$/.test(id)) return false;
+    submitted.set(id, Date.now());
+    try { sessionStorage.setItem(pendingKey, JSON.stringify([...submitted])); } catch (_) {}
+    if (finishedChecks.has(id)) {
+      if (finishedChecks.get(id)) emit(id, true);
+      else notify("SUBMISSION_RESULT", { id });
+    }
+    inspectRoute();
+    return true;
+  }
+
+  function emit(id, confirmed = false) {
     if (!/^\d+$/.test(String(id)) || !fresh(id)) return;
-    window.postMessage({ source: "leet2git-page", type: "SUBMISSION", id: String(id) }, location.origin);
+    notify("SUBMISSION", { id: String(id), confirmed });
   }
 
   function inspectCheck(url, body) {
     const match = String(url || "").match(checkPath);
     if (!match || !body || typeof body !== "object") return;
     if (body.state && body.state !== "SUCCESS") return;
-    if (Number(body.status_code) === 10 || body.status_msg === "Accepted") {
-      acceptedChecks.add(match[1]);
-      emit(match[1]);
-    }
+    if (body.status_code == null && typeof body.status_msg !== "string") return;
+    const id = match[1];
+    if (finishedChecks.has(id)) return;
+    const accepted = Number(body.status_code) === 10 || body.status_msg === "Accepted";
+    finishedChecks.set(id, accepted);
+    if (!fresh(id)) return;
+    if (accepted) emit(id, true);
+    else notify("SUBMISSION_RESULT", { id });
   }
 
   const originalFetch = window.fetch;
@@ -59,16 +83,31 @@
     const method = String(args[1]?.method || args[0]?.method || "GET").toUpperCase();
     const isSubmit = method === "POST" && submitPath.test(String(url || ""));
     const isCheck = checkPath.test(String(url || ""));
-    const promise = originalFetch.apply(this, args);
+    if (isSubmit) notify("SUBMIT_STARTED");
+    let promise;
+    try { promise = originalFetch.apply(this, args); }
+    catch (error) {
+      if (isSubmit) notify("SUBMIT_FAILED");
+      if (isCheck) checkFailed(url);
+      throw error;
+    }
     if (!isSubmit && !isCheck) return promise;
     return promise.then((response) => {
       if (response.ok) {
         response.clone().json().then((body) => {
-          if (isSubmit) rememberSubmit(body);
+          if (isSubmit && !rememberSubmit(body)) notify("SUBMIT_FAILED");
           if (isCheck) inspectCheck(url, body);
-        }).catch(() => {});
-      }
+        }).catch(() => {
+          if (isSubmit) notify("SUBMIT_FAILED");
+          if (isCheck) checkFailed(url);
+        });
+      } else if (isSubmit) notify("SUBMIT_FAILED", { status: response.status });
+      else if (isCheck) checkFailed(url, response.status);
       return response;
+    }, (error) => {
+      if (isSubmit) notify("SUBMIT_FAILED");
+      if (isCheck) checkFailed(url);
+      throw error;
     });
   };
 
@@ -82,17 +121,30 @@
   XMLHttpRequest.prototype.send = function (...args) {
     const isSubmit = this.__leet2gitMethod === "POST" && submitPath.test(this.__leet2gitUrl || "");
     const isCheck = checkPath.test(this.__leet2gitUrl || "");
+    if (isSubmit) notify("SUBMIT_STARTED");
     if (isSubmit || isCheck) {
       this.addEventListener("loadend", () => {
         try {
-          if (this.status < 200 || this.status >= 300) return;
+          if (this.status < 200 || this.status >= 300) {
+            if (isSubmit) notify("SUBMIT_FAILED", { status: this.status });
+            if (isCheck) checkFailed(this.__leet2gitUrl, this.status);
+            return;
+          }
           const body = this.responseType === "json" ? this.response : JSON.parse(this.responseText);
-          if (isSubmit) rememberSubmit(body);
+          if (isSubmit && !rememberSubmit(body)) notify("SUBMIT_FAILED");
           if (isCheck) inspectCheck(this.__leet2gitUrl, body);
-        } catch (_) { /* Ignore non-JSON responses. */ }
+        } catch (_) {
+          if (isSubmit) notify("SUBMIT_FAILED");
+          if (isCheck) checkFailed(this.__leet2gitUrl);
+        }
       }, { once: true });
     }
-    return originalSend.apply(this, args);
+    try { return originalSend.apply(this, args); }
+    catch (error) {
+      if (isSubmit) notify("SUBMIT_FAILED");
+      if (isCheck) checkFailed(this.__leet2gitUrl);
+      throw error;
+    }
   };
 
   // A result-page route is considered only for an ID returned by a fresh

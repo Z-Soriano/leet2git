@@ -2,7 +2,7 @@
 const storageReady = chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
 const defaultRepo = "leetcode-solutions";
 const destinationVersion = 2;
-const pending = new Set();
+const pending = new Map();
 let migrationPromise;
 const languageExtensions = {
   "bash": "sh", "c": "c", "c++": "cpp", "cpp": "cpp", "c#": "cs", "csharp": "cs",
@@ -129,14 +129,19 @@ async function syncSubmission(id, tabId) {
   let settings = await chrome.storage.local.get([
     "token", "owner", "repo", "enabled", "isPublic", "destinationVersion",
   ]);
-  if (!settings.enabled || !settings.token || !settings.owner || !settings.repo) return;
+  if (!settings.enabled) throw new Error("Auto sync is paused in leet2git settings.");
+  if (!settings.token || !settings.owner || !settings.repo) {
+    throw new Error("Connect GitHub in leet2git settings to save submissions.");
+  }
 
   const result = await chrome.tabs.sendMessage(tabId, { type: "GET_SUBMISSION", id });
   if (!result?.ok) throw new Error(result?.error || "Could not read the LeetCode submission.");
   const details = result.details;
   const number = typeof details?.number === "string"
     ? details.number.replace(/[\r\n]/g, " ").trim() : "";
-  if (!details?.accepted) return;
+  if (!details?.accepted) {
+    return { outcome: "not-accepted", message: "Submission was not Accepted. Nothing was saved." };
+  }
   if (details.id !== id || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(details.slug || "") ||
       typeof details.code !== "string" || !details.code.trim() ||
       !number || number.length > 50 ||
@@ -155,10 +160,34 @@ async function syncSubmission(id, tabId) {
     `Problem: https://leetcode.com/problems/${details.slug}/\n\n` +
     `Solutions are named by LeetCode submission ID.\n`;
   await putIfMissing(settings.token, settings.owner, settings.repo, `${folder}/README.md`, readme);
-  await setStatus(
-    codeUploaded ? "uploaded" : "idle",
-    `${codeUploaded ? "Uploaded" : "Already saved"} ${number}. ${safeTitle} (${id})`,
-  );
+  const statusMessage = `${codeUploaded ? "Uploaded" : "Already saved"} ${number}. ${safeTitle} (${id})`;
+  await setStatus(codeUploaded ? "uploaded" : "idle", statusMessage);
+  return { outcome: codeUploaded ? "uploaded" : "already-saved", message: statusMessage };
+}
+
+function leetcodeSender(sender) {
+  let url;
+  try { url = new URL(sender.url); } catch (_) { return false; }
+  return sender.id === chrome.runtime.id && Number.isInteger(sender.tab?.id) && sender.frameId === 0 &&
+    url.origin === "https://leetcode.com" && url.pathname.startsWith("/problems/");
+}
+
+async function indicatorState() {
+  await storageReady;
+  const settings = await chrome.storage.local.get([
+    "token", "owner", "repo", "enabled", "lastStatus",
+  ]);
+  const configured = Boolean(settings.token && settings.owner && settings.repo);
+  if (!configured) {
+    return { ready: false, canProcess: false, reason: "Connect GitHub in leet2git settings." };
+  }
+  if (!settings.enabled) {
+    return { ready: false, canProcess: false, reason: "Auto sync is paused in leet2git settings." };
+  }
+  if (settings.lastStatus?.kind === "error") {
+    return { ready: false, canProcess: true, reason: settings.lastStatus.message };
+  }
+  return { ready: true, canProcess: true, reason: "Ready for new Accepted submissions." };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -170,21 +199,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "ACCEPTED_CANDIDATE") {
-    let url;
-    try { url = new URL(sender.url); } catch (_) { return; }
-    if (sender.id !== chrome.runtime.id || !Number.isInteger(sender.tab?.id) || sender.frameId !== 0 ||
-        url.origin !== "https://leetcode.com" || !url.pathname.startsWith("/problems/") ||
-        !/^\d+$/.test(String(message.id || ""))) return;
+    if (!leetcodeSender(sender) || !/^\d+$/.test(String(message.id || ""))) return;
     const id = String(message.id);
-    if (pending.has(id)) { sendResponse({ ok: true, duplicate: true }); return; }
-    pending.add(id);
-    syncSubmission(id, sender.tab.id)
-      .then(() => sendResponse({ ok: true }))
-      .catch(async (error) => {
+    if (!pending.has(id)) {
+      const task = syncSubmission(id, sender.tab.id).catch(async (error) => {
         await setStatus("error", error.message);
-        sendResponse({ ok: false, error: error.message });
-      })
-      .finally(() => pending.delete(id));
+        throw error;
+      }).finally(() => pending.delete(id));
+      pending.set(id, task);
+    }
+    pending.get(id)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === "GET_READY") {
+    if (!leetcodeSender(sender)) return;
+    indicatorState()
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 });
