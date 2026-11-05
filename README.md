@@ -1,5 +1,7 @@
 # leet2git
 
+For automatic uploads after each Accepted submission, use the [Chrome/Edge extension](extension/README.md). It runs on LeetCode problem pages without an extension tab. The Python command below is useful for importing recent submissions that were missed.
+
 A small Python command that copies your 20 most recent **Accepted** LeetCode submissions to GitHub. It saves each submission as `solutions/<problem-slug>/<submission-id>.<language-extension>`. Running it again skips files already present. If the target repository does not exist, it creates it under the GitHub account for your token. New repositories are private by default.
 
 ## Setup
@@ -24,7 +26,7 @@ A small Python command that copies your 20 most recent **Accepted** LeetCode sub
    python leet2git.py
    ```
 
-The default repository name is `leet2git`. Use `--repo my-solutions` for a different name, `--limit 5` for fewer submissions, or `--public` to make a **new** repository public. The existing local Git `origin` is unrelated to this setting; the command uses the GitHub API directly.
+The default repository name is `leetcode-solutions`, separate from this project's `leet2git` repository. Use `--repo my-solutions` for a different name, `--limit 5` for fewer submissions, or `--public` to make a **new** repository public. The existing local Git `origin` is unrelated to this setting; the command uses the GitHub API directly.
 
 ## Notes
 

@@ -228,7 +228,7 @@ def sync(leetcode: LeetCode, github: GitHub | None, repo_name: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default="leet2git", help="repository name under your GitHub account")
+    parser.add_argument("--repo", default="leetcode-solutions", help="repository name under your GitHub account")
     parser.add_argument("--limit", type=int, default=20, help="recent accepted submissions (1-20)")
     parser.add_argument("--public", action="store_true", help="make a newly created repo public")
     parser.add_argument("--dry-run", action="store_true", help="fetch code without writing to GitHub")

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>leet2git</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>leet2git</h1>
+    <p class="intro">Accepted LeetCode submissions sync while you solve. No extension tab needs to stay open.</p>
+    <form id="settings">
+      <label for="repo">GitHub repository name</label>
+      <input id="repo" name="repo" value="leetcode-solutions" required pattern="[A-Za-z0-9_.-]+" autocomplete="off">
+      <label for="token">GitHub personal access token</label>
+      <input id="token" name="token" type="password" autocomplete="off" placeholder="Paste token once">
+      <p id="token-hint" class="hint"></p>
+      <label class="check"><input id="enabled" type="checkbox" checked> Sync new Accepted submissions</label>
+      <label class="check"><input id="public" type="checkbox"> Make a new repository public</label>
+      <button id="save" type="submit">Save and connect</button>
+    </form>
+    <p id="message" role="status" aria-live="polite"></p>
+    <p id="last-status" class="hint"></p>
+    <p class="hint">Your GitHub token stays in this browser profile. LeetCode uses your existing browser login.</p>
+  </main>
+</body>
+</html>
